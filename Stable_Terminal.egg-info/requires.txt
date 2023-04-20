@@ -1,0 +1,4 @@
+accelerate
+bitsandbytes
+transformers
+torch

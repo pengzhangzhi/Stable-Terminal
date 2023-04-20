@@ -1,0 +1,7 @@
+query
+setup.py
+Stable_Terminal.egg-info/PKG-INFO
+Stable_Terminal.egg-info/SOURCES.txt
+Stable_Terminal.egg-info/dependency_links.txt
+Stable_Terminal.egg-info/requires.txt
+Stable_Terminal.egg-info/top_level.txt
