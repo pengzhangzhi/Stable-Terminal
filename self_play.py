@@ -1,3 +1,6 @@
+from collections import namedtuple
+
+
 def cprint(msg: str, color: str = "blue", **kwargs) -> str:
     if color == "blue":
         print("\033[34m" + msg + "\033[0m", **kwargs)
@@ -15,15 +18,25 @@ def cprint(msg: str, color: str = "blue", **kwargs) -> str:
         raise ValueError(f"Invalid info color: `{color}`")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("user_prompt", type=str, action="store")
-    
-    parser.add_argument("--device", type=str, default="0",help="CUDA_VISIBLE_DEVICES")
+def parse_debating_args(parser):
+    parser.add_argument(
+        "--topic",
+        type=str,
+        help="debating topic",
+        default="Should the US government ban TikTok?",
+    )
+    parser.add_argument(
+        "--iters", type=int, default=100, help="number of turns in the debate"
+    )
+    return parser
+
+
+def parse_llm_args(parser):
+    parser.add_argument("--device", type=str, default="0", help="CUDA_VISIBLE_DEVICES")
     parser.add_argument(
         "--max_new_tokens",
         type=int,
-        default=128,
+        default=256,
         help="max number of tokens to generate, min:32.0, max:3072.0, step:32",
     )
     parser.add_argument(
@@ -62,20 +75,27 @@ def parse_args():
         help=' one of ["stabilityai/stablelm-tuned-alpha-7b", "stabilityai/stablelm-base-alpha-7b", "stabilityai/stablelm-tuned-alpha-3b", "stabilityai/stablelm-base-alpha-3b"]',
     )
     parser.add_argument("-v", "--verbose", type=bool, default=False)
+    return parser
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser = parse_debating_args(parser)
+    parser = parse_llm_args(parser)
     return parser.parse_args()
 
-def query_lm(args):
+def load_model(args):
     verbose = args.verbose
     model_name = args.model_name
-    if verbose:
-        cprint(f"Using `{model_name}`", color="blue")
-
     torch_dtype = args.torch_dtype
     load_in_8bit = args.load_in_8bit
     device_map = args.device_map
+    
     if verbose:
+        cprint(f"Using `{model_name}`", color="blue")
         cprint(f"Loading with: `{torch_dtype=}, {load_in_8bit=}, {device_map=}`")
-
+        
+        
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
@@ -84,12 +104,17 @@ def query_lm(args):
         device_map=device_map,
         offload_folder="./offload",
     )
-    model = model.to()
+    return tokenizer, model
 
+def query_lm(args,tokenizer, model):
+    verbose = args.verbose
+    
+    
+    
     # Process the user prompt
     user_prompt = args.user_prompt
 
-    if "tuned" in model_name:
+    if "tuned" in args.model_name:
         # Add system prompt for chat tuned models
         system_prompt = """<|SYSTEM|># StableLM Tuned (Alpha version)
         - StableLM is a helpful and harmless open-source AI language model developed by StabilityAI.
@@ -135,15 +160,18 @@ def query_lm(args):
     # Display
     if verbose:
         cprint(user_prompt + "\n", color="purple")
-    cprint(completion, color="green")
+        cprint(completion, color="green")
+    return completion
+
 
 if __name__ == "__main__":
     import argparse
 
     args = parse_args()
     import os
+
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
-    
+
     import torch
     from transformers import (
         AutoModelForCausalLM,
@@ -162,4 +190,41 @@ if __name__ == "__main__":
                     return True
             return False
 
-    query_lm(args)
+    topic = args.topic
+    tokenizer, model = load_model(args)
+    
+    history = namedtuple("History", ["side", "prompt", "response"])
+    history_list = []
+    
+    for i in range(args.iters):
+        if i == 0:
+            prompt = (
+                init_prompt_pro
+            ) = f"You are an professional debater who proponent of the following statement: {topic}.\
+                                        Please give your opening statement."
+            side = "Pro"
+
+        else:
+            if i % 2 == 0:
+                # pro side
+                prompt = f"You are an professional debater who proponent of the following statement: {topic}.\
+                        Your opponent has made the following statement: {history_list[-1].response}.\
+                        Please give your response. Do not repeat what your opponent has said."
+                side = "Pro"
+            else:
+                # con side
+                prompt = f"Pretent you are an professional debater who opponent of the following statement: {topic}.\
+                        Your opponent has made the following statement: {history_list[-1].response}.\
+                        Please give your response. Do not repeat what your opponent has said."
+                side = "Con"
+        args.user_prompt = prompt
+        response = query_lm(args, tokenizer, model)
+        history_list.append(history("con", prompt, response))
+        color = "blue" if i % 2 == 0 else "green"
+        cprint(f">>> {side}", color=color)
+        cprint(f"> {response}", color=color)
+    # save the responses
+    with open(f"debate_{topic}.txt", "w") as f:
+        for history in history_list:
+            f.write(f"{history.side}\t{history.prompt}\t{history.response}\n")
+            
